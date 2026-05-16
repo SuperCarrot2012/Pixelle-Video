@@ -147,7 +147,7 @@ def _render_one_project_card(
                 f"📂 {load_label}",
                 key=f"sd_load_{card_index}_{h}",
                 disabled=is_active,
-                use_container_width=True,
+                width="stretch",
             ):
                 if activate_project(proj.root_path):
                     st.session_state.short_drama_load_toast = True
@@ -156,13 +156,13 @@ def _render_one_project_card(
             if st.button(
                 f"✏️ {tr('short_drama.project.edit')}",
                 key=f"sd_edit_{card_index}_{h}",
-                use_container_width=True,
+                width="stretch",
             ):
                 project_edit_dialog(proj.root_path)
         with d_col:
             if st.button(
                 f"🗑️ {tr('short_drama.project.delete')}",
                 key=f"sd_del_{card_index}_{h}",
-                use_container_width=True,
+                width="stretch",
             ):
                 project_delete_dialog(proj.root_path)

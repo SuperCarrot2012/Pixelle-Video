@@ -66,11 +66,11 @@ def project_edit_dialog(root_path: str) -> None:
         _, c_save, c_cancel = st.columns([3, 1, 1])
         with c_save:
             submitted = st.form_submit_button(
-                tr("short_drama.project.save"), type="primary", use_container_width=True
+                tr("short_drama.project.save"), type="primary", width="stretch"
             )
         with c_cancel:
             cancelled = st.form_submit_button(
-                tr("short_drama.project.cancel"), use_container_width=True
+                tr("short_drama.project.cancel"), width="stretch"
             )
     if cancelled:
         st.rerun()
@@ -100,7 +100,7 @@ def project_delete_dialog(root_path: str) -> None:
         tr("short_drama.project.delete_confirm_yes"),
         type="primary",
         key=f"sd_delete_dlg_yes_{suf}",
-        use_container_width=True,
+        width="stretch",
     ):
         ok, err = delete_project_directory(str(root_path))
         if ok:
@@ -112,6 +112,6 @@ def project_delete_dialog(root_path: str) -> None:
     if c_no.button(
         tr("short_drama.project.cancel"),
         key=f"sd_delete_dlg_no_{suf}",
-        use_container_width=True,
+        width="stretch",
     ):
         st.rerun()

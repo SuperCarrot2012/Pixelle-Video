@@ -22,7 +22,7 @@ from typing import Dict, Optional
 from loguru import logger
 
 _locales: Dict[str, dict] = {}
-_current_language: str = "en_US"  # Default fallback to English
+_current_language: str = "zh_CN"  # Default fallback to Chinese
 
 
 def load_locales() -> Dict[str, dict]:
@@ -128,7 +128,7 @@ def get_available_languages() -> Dict[str, str]:
 def detect_system_language() -> str:
     """
     Detect system/OS language and return the best matching locale code.
-    Falls back to English if no match found.
+    Falls back to Chinese if no match found.
     
     This is designed for self-hosted scenarios where the server and browser
     are typically on the same machine.
@@ -235,8 +235,8 @@ def detect_system_language() -> str:
     except Exception as e:
         logger.warning(f"Failed to detect system language: {e}")
     
-    # Fallback to English
-    return "en_US"
+    # Fallback to Chinese
+    return "zh_CN"
 
 
 # Auto-load locales on import

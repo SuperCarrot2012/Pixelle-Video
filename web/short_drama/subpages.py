@@ -11,8 +11,10 @@
 # limitations under the License.
 
 """
-Stub subpages — 角色 / 道具 / 场景 / 分镜.
-Each one is gated by the global active project (see work_context).
+Stub subpages — 道具 / 场景 / 分镜.
+
+The 角色 (Roles) subpage has its own module: ``web.short_drama.role_page``.
+Each subpage is gated by the global active project (see ``work_context``).
 """
 
 from __future__ import annotations
@@ -31,13 +33,6 @@ def _render_work_path_gate() -> bool:
         return True
     st.info(tr("short_drama.work.no_project"))
     return False
-
-
-def render_character_subpage(_pixelle_video: Any) -> None:
-    """角色 — 待实现"""
-    if not _render_work_path_gate():
-        return
-    st.caption(tr("short_drama.work.using_path", path=get_work_path()))
 
 
 def render_props_subpage(_pixelle_video: Any) -> None:

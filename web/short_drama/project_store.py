@@ -244,7 +244,7 @@ def update_project(
     root = Path(root_path_str)
     meta = load_project_at(root)
     if meta is None:
-        return False, "not_found"
+        return False, "project_not_found"
     name = (name or "").strip()
     if not name:
         return False, "name_empty"
@@ -306,7 +306,7 @@ def delete_project_directory(root_path_str: str) -> tuple[bool, str]:
     pj = _project_json_path(root)
     if not pj.is_file():
         remove_from_index_only(root_path_str)
-        return False, "not_found"
+        return False, "project_not_found"
     try:
         shutil.rmtree(root)
     except OSError:

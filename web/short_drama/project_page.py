@@ -23,7 +23,7 @@ import streamlit as st
 
 from web.i18n import tr
 from web.short_drama.dialogs import project_delete_dialog, project_edit_dialog
-from web.short_drama.errors import map_project_error
+from web.short_drama.errors import map_error
 from web.short_drama.project_store import (
     ProjectMeta,
     create_project,
@@ -78,7 +78,7 @@ def _render_new_project_form() -> None:
         st.toast(tr("short_drama.project.create_success"), icon="✅")
         st.rerun()
     else:
-        st.error(map_project_error(err_key))
+        st.error(map_error(err_key))
 
 
 def _render_active_project_banner() -> None:

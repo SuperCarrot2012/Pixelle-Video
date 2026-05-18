@@ -27,8 +27,8 @@ import streamlit as st
 from web.i18n import tr
 from web.pipelines.base import PipelineUI, register_pipeline_ui
 from web.short_drama.project_page import render_project_subpage
+from web.short_drama.role_page import render_role_subpage
 from web.short_drama.subpages import (
-    render_character_subpage,
     render_props_subpage,
     render_scene_subpage,
     render_storyboard_subpage,
@@ -59,7 +59,7 @@ class ShortDramaPipelineUI(PipelineUI):
         with project_tab:
             render_project_subpage(pixelle_video)
         with character_tab:
-            render_character_subpage(pixelle_video)
+            render_role_subpage(pixelle_video)
         with props_tab:
             render_props_subpage(pixelle_video)
         with scene_tab:

@@ -25,7 +25,7 @@ WORK_NAME_KEY = "short_drama_work_name"
 SESSION_HYDRATED_KEY = "short_drama_active_hydrated"
 
 # Resource subdirectories under project root (created on load)
-RESOURCE_DIRS = ("characters", "props", "scenes", "storyboard")
+RESOURCE_DIRS = ("roles", "props", "scenes", "storyboard")
 
 # Persistence file (relative to repo root) so the active project survives
 # browser refreshes and Streamlit restarts.
@@ -177,7 +177,7 @@ def clear_active_project_if_matches(root_path: str) -> None:
 
 def resource_dir(resource: str) -> Path | None:
     """
-    Subpath under active project, e.g. resource='characters' -> .../characters
+    Subpath under active project, e.g. resource='roles' -> .../roles
     """
     base = get_work_path()
     if not base or resource not in RESOURCE_DIRS:

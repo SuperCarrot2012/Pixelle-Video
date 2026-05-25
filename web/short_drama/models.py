@@ -15,29 +15,40 @@ Short Drama — generation models (ComfyUI workflow mapping).
 
 Shared by all subpages (角色 / 道具 / 场景 / 分镜, …). ``MODEL_REGISTRY`` is keyed by
 media category (``image`` / ``video``); each value maps a model id to workflow
-metadata for ``web.short_drama.comfy_image`` / ComfyKit.
+metadata for ``web.short_drama.comfy_service`` / local ComfyUI (``web/short_drama/workflow/``).
 
 Fields per model:
     label: Display name in the model selectbox.
-    workflow_key: Path under ``workflows/`` (e.g. ``selfhost/foo.json``).
-    requires_ref_image: If True, generation fails without a reference upload.
-    ref_image_param: Workflow parameter name for the reference image path.
+    workflow_key: Maps subpage scene → workflow JSON filename under ``web/short_drama/workflow/``.
+        Keys: ``role`` | ``props`` | ``scene`` | ``storyboard`` (see :data:`WORKFLOW_SCENES`).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, Optional
+
+WorkflowScene = Literal["role", "props", "scene", "storyboard"]
+
+WORKFLOW_SCENES: tuple[WorkflowScene, ...] = (
+    "role",
+    "props",
+    "scene",
+    "storyboard",
+)
 
 # TODO: 把你导出的 Qwen-Image-Edit-2511 ComfyUI 工作流 JSON（API 格式）放到
-# ``workflows/selfhost/image_qwen_edit_2511.json``；如需更换文件名，同时更新这里的
-# ``workflow_key``。工作流内对应的"参考图"节点入参名要与 ``ref_image_param`` 一致。
+# ``web/short_drama/workflow/`` 下对应文件；各子页场景可配置不同 JSON。
+# 参考图在业务页调用 ``comfy_service.upload_image_to_comfy``（每张图一次）并写入 LoadImage 节点。
 MODEL_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
     "image": {
         "Qwen-Image-Edit-2511": {
             "label": "Qwen-Image-Edit-2511",
-            "workflow_key": "selfhost/image_qwen_edit_2511.json",
-            "requires_ref_image": False,
-            "ref_image_param": "image",
+            "workflow_key": {
+                "role": "qwen-image-edit-2511-roles.json",
+                "props": "qwen-image-edit-2511-roles.json",
+                "scene": "qwen-image-edit-2511-roles.json",
+                "storyboard": "qwen-image-edit-2511-roles.json",
+            },
         },
     },
     "video": {},
@@ -45,3 +56,17 @@ MODEL_REGISTRY: dict[str, dict[str, dict[str, Any]]] = {
 
 IMAGE_MODEL_REGISTRY: dict[str, dict[str, Any]] = MODEL_REGISTRY["image"]
 VIDEO_MODEL_REGISTRY: dict[str, dict[str, Any]] = MODEL_REGISTRY["video"]
+
+
+def get_workflow_key_for_scene(
+    model_info: dict[str, Any],
+    scene: WorkflowScene,
+) -> Optional[str]:
+    """Return workflow filename for ``scene``, or ``None`` if not configured."""
+    mapping = model_info.get("workflow_key")
+    if not isinstance(mapping, dict):
+        return None
+    key = mapping.get(scene)
+    if not isinstance(key, str) or not key.strip():
+        return None
+    return key.strip()

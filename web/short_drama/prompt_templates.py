@@ -33,11 +33,17 @@ GenerationKind = Literal["closeup", "three_view"]
 # Appended to the user prompt when generating specific asset types.
 GENERATION_PROMPT_SUFFIX: dict[GenerationKind, str] = {
     "closeup": (
-        "角色面部与肩部特写，正面构图，五官清晰，背景简洁，高清细节。"
+        "人像特写，正对镜头，从头顶到锁骨完整展示，不裁切头顶，head to collarbone complete，\n"
+        "素灰纯色背景，均匀柔光，无硬阴影。"
     ),
     "three_view": (
-        "角色三视图设定图：正面、左侧面、背面并排展示，全身比例一致，"
-        "白底或浅灰底，线条干净，便于建模参考。"
+        "角色三视图设定图。\n"
+        "character design sheet, character turnaround,\n"
+        "同一画面左至右并排：正视图+侧视图+背视图。\n"
+        "全身立像从头顶到脚底完整展示，full body head to toe，不裁切头顶和脚部，\n"
+        "自然站立，素灰纯色背景，均匀柔光，无硬阴影，\n"
+        "三视图一致性，高精度建模清晰，\n"
+        "头与身体的比例为1：8，腰部以上占身体65%，身材修长，大长腿。"
     ),
 }
 
@@ -47,10 +53,8 @@ PROMPT_TEMPLATES: list[dict[str, str]] = [
         "id": "realistic_to_drawing",
         "label": "真人转绘",
         "text": (
-            "将参考图中的真人转绘为统一的二次元/插画风角色立绘：\n"
-            "- 五官与发型保持高度一致，体态自然，正面视角；\n"
-            "- 色彩明亮、线条干净，背景使用纯色或浅色渐变；\n"
-            "- 输出 1:1 比例，4K 清晰度。"
+            "将参考图中的角色，转绘成真人角色设定图。把皮肤材质转换为真实人类皮肤质感。"
+            "转为影棚商业人像摄影光效，电影级光影，真人质感，柔光箱主光，纯色浅灰背景，超高分辨率，高清人像。"
         ),
     },
 ]

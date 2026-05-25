@@ -13,9 +13,8 @@
 """
 Error key → i18n mapping for all Short Drama operations.
 
-Store modules (project_store, role_store, …) and ComfyUI helpers (comfy_image)
-return short string error codes. UI code passes those codes to :func:`map_error`
-for localized messages.
+Store modules and ``comfy_service`` return short string error codes. UI code
+passes those codes to :func:`map_error` for localized messages.
 
 If you add a new error code in a store, register it in :data:`_ERR_I18N`
 below. Keys MUST be globally unique across all stores — namespace your new
@@ -50,7 +49,7 @@ _ERR_I18N: dict[str, str] = {
     "move_into_self": "short_drama.project.err.move_into_self",
     "move_parent_missing": "short_drama.project.err.move_parent_missing",
     "move_failed": "short_drama.project.err.move_failed",
-    # ----- role_store -----
+    # ----- role_store / role_page -----
     "cn_name_empty": "short_drama.role.err.cn_name_empty",
     "en_name_empty": "short_drama.role.err.en_name_empty",
     "en_name_invalid": "short_drama.role.err.en_name_invalid",
@@ -66,19 +65,18 @@ _ERR_I18N: dict[str, str] = {
     "prompt_empty": "short_drama.role.err.prompt_empty",
     "model_invalid": "short_drama.role.err.model_invalid",
     "ref_image_save_failed": "short_drama.role.err.ref_image_save_failed",
-    "ref_image_required": "short_drama.role.err.ref_image_required",
     "role_missing": "short_drama.role.err.role_missing",
     "generation_failed": "short_drama.role.err.generation_failed",
-    # ----- comfy_image -----
-    "workflow_missing": "short_drama.role.err.workflow_missing",
-    "workflow_missing_selfhost": "short_drama.role.err.workflow_missing_selfhost",
-    "workflow_unreadable": "short_drama.role.err.workflow_unreadable",
-    "workflow_id_missing": "short_drama.role.err.workflow_id_missing",
-    "temp_write_failed": "short_drama.role.err.temp_write_failed",
-    "generated_image_missing": "short_drama.role.err.generated_image_missing",
-    "generated_image_unreadable": "short_drama.role.err.generated_image_unreadable",
-    "no_image_output": "short_drama.role.err.no_image_output",
-    "workflow_failed": "short_drama.role.err.workflow_failed",
+    # ----- comfy_service (web/short_drama/workflow/) -----
+    "ref_upload_failed": "short_drama.comfy.err.ref_upload_failed",
+    "workflow_key_invalid": "short_drama.comfy.err.workflow_key_invalid",
+    "workflow_missing": "short_drama.comfy.err.workflow_missing",
+    "workflow_unreadable": "short_drama.comfy.err.workflow_unreadable",
+    "workflow_invalid": "short_drama.comfy.err.workflow_invalid",
+    "temp_write_failed": "short_drama.comfy.err.temp_write_failed",
+    "no_output": "short_drama.comfy.err.no_output",
+    "execution_failed": "short_drama.comfy.err.execution_failed",
+    "workflow_scene_missing": "short_drama.comfy.err.scene_missing",
 }
 
 

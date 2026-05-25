@@ -23,11 +23,12 @@ Implementation notes:
   content hash as filename (see role_store.save_bytes_to_temp).
 - Model → workflow mapping: ``web.short_drama.models.IMAGE_MODEL_REGISTRY``.
 - Preset prompts: ``web.short_drama.prompt_templates.PROMPT_TEMPLATES``.
-- ComfyUI execution: ``web.short_drama.comfy_image`` (not ``pixelle_video.media``).
+- ComfyUI execution: ``web.short_drama.comfy_service`` (``comfyui_xy``, not ComfyKit).
 """
 
 from __future__ import annotations
 
+import random
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -37,14 +38,14 @@ from loguru import logger
 
 from web.i18n import tr
 from web.short_drama import role_store
-from web.short_drama.comfy_image import (
-    ComfyImageGenerationError,
-    execute_comfy_image_workflow,
-    validate_workflow,
+from web.short_drama.comfy_service import (
+    execute_comfy_workflow,
+    load_workflow,
+    upload_image_to_comfy,
 )
 from web.short_drama.dialogs import role_delete_dialog
 from web.short_drama.errors import map_error
-from web.short_drama.models import IMAGE_MODEL_REGISTRY
+from web.short_drama.models import IMAGE_MODEL_REGISTRY, get_workflow_key_for_scene
 from web.short_drama.prompt_templates import (
     GENERATION_PROMPT_SUFFIX,
     PROMPT_TEMPLATES,
@@ -70,6 +71,24 @@ _SK_EDIT_ERROR = "sd_role_edit_error"
 _SK_EDIT_SUCCESS = "sd_role_edit_success"
 _SK_EDITING_ROLE = "sd_role_editing_en"  # english_name when editing existing role
 _SK_RESET_PENDING = "sd_role_reset_pending"
+
+_MAX_REF_IMAGES = 3
+
+# qwen-image-edit-2511-roles.json: LoadImage 8/9/10 → TextEncode node 11 image1/image2/image3
+_QWEN_ROLE_REF_SLOTS: tuple[tuple[str, str], ...] = (
+    ("8", "image1"),
+    ("9", "image2"),
+    ("10", "image3"),
+)
+
+# qwen-image-edit-2511-roles.json — 生成前动态覆盖（按需修改）
+_QWEN_ROLE_KSAMPLER_NODE_ID = "13"
+_QWEN_ROLE_EMPTY_LATENT_NODE_ID = "16"
+# EmptyLatentImage: (width, height, batch_size) per generation kind (model-agnostic)
+_ROLE_LATENT_BY_KIND: dict[GenerationKind, tuple[int, int, int]] = {
+    "closeup": (1440, 2560, 1),
+    "three_view": (3240, 2560, 1),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -232,10 +251,11 @@ def _render_edit_form(pixelle_video: Any) -> None:
         ref_image = st.file_uploader(
             tr("short_drama.role.ref_image"),
             type=["png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=False,
-            help=tr("short_drama.role.ref_image_help"),
+            accept_multiple_files=True,
+            help=tr("short_drama.role.ref_image_help", max=_MAX_REF_IMAGES),
             key="sd_role_ref_image",
         )
+        ref_files = _limit_ref_images(ref_image)
 
         model_labels = [info["label"] for info in IMAGE_MODEL_REGISTRY.values()]
         model_keys = list(IMAGE_MODEL_REGISTRY.keys())
@@ -265,14 +285,14 @@ def _render_edit_form(pixelle_video: Any) -> None:
                 key="sd_role_generate_closeup_btn",
                 width="stretch",
             ):
-                _handle_image_generation(pixelle_video, ref_image, "closeup")
+                _handle_image_generation(pixelle_video, ref_files, "closeup")
         with btn_three:
             if st.button(
                 tr("short_drama.role.generate_three_view"),
                 key="sd_role_generate_three_view_btn",
                 width="stretch",
             ):
-                _handle_image_generation(pixelle_video, ref_image, "three_view")
+                _handle_image_generation(pixelle_video, ref_files, "three_view")
         with btn_reset:
             if st.button(
                 tr("short_drama.role.reset_form"),
@@ -449,15 +469,81 @@ def _validate_names(cn_name: str, en_name: str) -> bool:
     return True
 
 
-def _prepare_ref_for_comfy(ref_image) -> Optional[str]:
-    """Return a disposable local path for ComfyUI; caller must discard after use."""
+def _coerce_ref_images(ref_image) -> list:
     if ref_image is None:
-        return None
-    ref_path = role_store.prepare_ref_image_for_generation(ref_image)
-    if ref_path is None:
-        _set_edit_error(map_error("ref_image_save_failed"))
-        st.rerun()
-    return ref_path
+        return []
+    if isinstance(ref_image, list):
+        return ref_image
+    return [ref_image]
+
+
+def _limit_ref_images(ref_image) -> list:
+    """Normalize uploads and cap at ``_MAX_REF_IMAGES`` (shows warning if exceeded)."""
+    files = _coerce_ref_images(ref_image)
+    if len(files) > _MAX_REF_IMAGES:
+        st.warning(
+            tr("short_drama.role.ref_image_too_many", max=_MAX_REF_IMAGES)
+        )
+        return files[:_MAX_REF_IMAGES]
+    return files
+
+
+def _configure_workflow_ref_slots(
+    workflow: dict[str, Any],
+    ref_count: int,
+) -> list[str]:
+    """Drop unused LoadImage nodes and encoder image inputs for ``ref_count`` refs (0–3)."""
+    encoder = workflow.get("11")
+    if not isinstance(encoder, dict):
+        return []
+    inputs = encoder.get("inputs")
+    if not isinstance(inputs, dict):
+        return []
+
+    ref_count = max(0, min(ref_count, len(_QWEN_ROLE_REF_SLOTS)))
+    active_node_ids: list[str] = []
+    for i, (node_id, input_key) in enumerate(_QWEN_ROLE_REF_SLOTS):
+        if i < ref_count:
+            active_node_ids.append(node_id)
+        else:
+            workflow.pop(node_id, None)
+            inputs.pop(input_key, None)
+    return active_node_ids
+
+
+def _apply_role_workflow_generation_params(
+    workflow: dict[str, Any],
+    kind: GenerationKind,
+) -> None:
+    """Override KSampler seed (random) and EmptyLatentImage size by generation kind."""
+    sampler = workflow.get(_QWEN_ROLE_KSAMPLER_NODE_ID)
+    if isinstance(sampler, dict):
+        inputs = sampler.get("inputs")
+        if isinstance(inputs, dict):
+            inputs["seed"] = random.randint(0, 2**63 - 1)
+
+    width, height, batch_size = _ROLE_LATENT_BY_KIND[kind]
+    latent = workflow.get(_QWEN_ROLE_EMPTY_LATENT_NODE_ID)
+    if isinstance(latent, dict):
+        inputs = latent.get("inputs")
+        if isinstance(inputs, dict):
+            inputs["width"] = width
+            inputs["height"] = height
+            inputs["batch_size"] = batch_size
+
+
+def _prepare_refs_for_comfy(ref_files: list) -> list[str]:
+    """Write uploads to disposable temp paths; caller must discard after use."""
+    if not ref_files:
+        return []
+    paths: list[str] = []
+    for uploaded in ref_files:
+        ref_path = role_store.prepare_ref_image_for_generation(uploaded)
+        if ref_path is None:
+            _set_edit_error(map_error("ref_image_save_failed"))
+            st.rerun()
+        paths.append(ref_path)
+    return paths
 
 
 def _handle_save_profile() -> None:
@@ -500,7 +586,7 @@ def _handle_save_profile() -> None:
 
 def _handle_image_generation(
     pixelle_video: Any,
-    ref_image,
+    ref_files: list,
     kind: GenerationKind,
 ) -> None:
     cn_name, en_name, desc, prompt, model_id = _read_form_fields()
@@ -523,24 +609,40 @@ def _handle_image_generation(
         st.rerun()
         return
 
-    workflow_key = model_info["workflow_key"]
-    wf_ok, wf_err = _check_workflow_ready(workflow_key)
-    if not wf_ok:
-        _set_edit_error(wf_err)
+    workflow_key = get_workflow_key_for_scene(model_info, "role")
+    if not workflow_key:
+        _set_edit_error(map_error("workflow_scene_missing", scene="role"))
         st.rerun()
         return
 
-    ref_path = _prepare_ref_for_comfy(ref_image)
-    if ref_image is not None and ref_path is None:
-        return
-
-    if model_info.get("requires_ref_image") and not ref_path:
-        _set_edit_error(map_error("ref_image_required"))
+    workflow, wf_err, wf_fmt = load_workflow(workflow_key)
+    if wf_err:
+        _set_edit_error(map_error(wf_err, **wf_fmt))
         st.rerun()
         return
+
+    ref_paths = _prepare_refs_for_comfy(ref_files)
+    load_node_ids = _configure_workflow_ref_slots(workflow, len(ref_paths))
 
     suffix = GENERATION_PROMPT_SUFFIX.get(kind, "")
     full_prompt = f"{prompt}\n\n{suffix}" if suffix else prompt
+    print(f"full_prompt: {full_prompt}")
+    for node in workflow.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if isinstance(inputs, dict) and "prompt" in inputs:
+            inputs["prompt"] = full_prompt
+
+    for node_id, local_path in zip(load_node_ids, ref_paths):
+        comfy_name, up_err, up_fmt = run_async(
+            upload_image_to_comfy(pixelle_video, local_path)
+        )
+        if up_err:
+            _set_edit_error(map_error(up_err, **up_fmt))
+            st.rerun()
+            return
+        workflow[node_id]["inputs"]["image"] = comfy_name
+
+    _apply_role_workflow_generation_params(workflow, kind)
 
     progress = st.progress(0, text=tr("short_drama.role.progress.starting"))
     start = time.time()
@@ -555,21 +657,19 @@ def _handle_image_generation(
 
     try:
         try:
-            image_local_path = run_async(
-                execute_comfy_image_workflow(
+            result, gen_err, gen_fmt = run_async(
+                execute_comfy_workflow(
                     pixelle_video=pixelle_video,
-                    workflow_key=workflow_key,
-                    prompt=full_prompt,
-                    ref_image_path=ref_path,
-                    ref_image_param=model_info.get("ref_image_param", "image"),
+                    workflow=workflow,
                     on_progress=_on_progress,
                 )
             )
-        except ComfyImageGenerationError as exc:
-            progress.empty()
-            _set_edit_error(map_error(exc.code, **exc.fmt))
-            st.rerun()
-            return
+            if gen_err or result is None or not result.paths:
+                progress.empty()
+                _set_edit_error(map_error(gen_err or "no_output", **gen_fmt))
+                st.rerun()
+                return
+            image_local_path = result.paths[0]
         except Exception as exc:  # noqa: BLE001 — surface to UI
             logger.exception(exc)
             progress.empty()
@@ -577,16 +677,11 @@ def _handle_image_generation(
             st.rerun()
             return
     finally:
-        role_store.discard_temp_file(ref_path)
+        for ref_path in ref_paths:
+            role_store.discard_temp_file(ref_path)
 
     progress.progress(100, text=tr("short_drama.role.progress.done"))
     elapsed = time.time() - start
-
-    existing = role_store.load_role(en_name)
-    if existing is not None:
-        existing.chinese_name = cn_name
-        existing.description = desc
-        role_store.update_role(existing)
 
     previews: list[dict] = list(st.session_state.get(_SK_PREVIEWS, []))
     previews.append(
@@ -654,16 +749,4 @@ def _promote_preview_to_official(preview_index: int) -> None:
     st.session_state[_SK_PREVIEWS] = previews
     st.rerun()
 
-
-# ---------------------------------------------------------------------------
-# Workflow / generation helpers
-# ---------------------------------------------------------------------------
-
-
-def _check_workflow_ready(workflow_key: str) -> tuple[bool, str]:
-    """Make sure the workflow JSON exists and (for RunningHub) has an ID."""
-    ok, err_key, fmt = validate_workflow(workflow_key)
-    if ok:
-        return True, ""
-    return False, map_error(err_key, **fmt)
 

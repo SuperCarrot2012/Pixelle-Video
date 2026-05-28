@@ -28,6 +28,7 @@ Implementation notes:
 
 from __future__ import annotations
 
+import base64
 import random
 import time
 from pathlib import Path
@@ -43,7 +44,7 @@ from web.short_drama.comfy_service import (
     load_workflow,
     upload_image_to_comfy,
 )
-from web.short_drama.dialogs import role_delete_dialog
+from web.short_drama.dialogs import role_delete_dialog, role_preview_image_dialog
 from web.short_drama.errors import map_error
 from web.short_drama.models import IMAGE_MODEL_REGISTRY, get_workflow_key_for_scene
 from web.short_drama.prompt_templates import (
@@ -71,6 +72,7 @@ _SK_EDIT_ERROR = "sd_role_edit_error"
 _SK_EDIT_SUCCESS = "sd_role_edit_success"
 _SK_EDITING_ROLE = "sd_role_editing_en"  # english_name when editing existing role
 _SK_RESET_PENDING = "sd_role_reset_pending"
+_SK_GEN_PENDING = "sd_role_gen_pending"  # GenerationKind while awaiting ComfyUI
 
 _MAX_REF_IMAGES = 3
 
@@ -86,9 +88,15 @@ _QWEN_ROLE_KSAMPLER_NODE_ID = "13"
 _QWEN_ROLE_EMPTY_LATENT_NODE_ID = "16"
 # EmptyLatentImage: (width, height, batch_size) per generation kind (model-agnostic)
 _ROLE_LATENT_BY_KIND: dict[GenerationKind, tuple[int, int, int]] = {
-    "closeup": (1440, 2560, 1),
-    "three_view": (3240, 2560, 1),
+    "closeup": (1440, 2560, 4),
+    "three_view": (3240, 2560, 4),
 }
+# Preview thumbnail size (px); aspect ratio matches ``_ROLE_LATENT_BY_KIND``, fixed per kind.
+_ROLE_PREVIEW_THUMB_BY_KIND: dict[GenerationKind, tuple[int, int]] = {
+    "closeup": (270, 480),
+    "three_view": (480, 379),
+}
+_PREVIEW_THUMB_GAP_PX = 12
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +120,19 @@ def render_role_subpage(pixelle_video: Any) -> None:
 
     st.divider()
 
+    gen_pending = st.session_state.get(_SK_GEN_PENDING)
     left, right = st.columns([1, 1], gap="medium")
     with left:
         _render_edit_form(pixelle_video)
     with right:
-        _render_preview_panel()
+        _render_preview_panel(disabled=bool(gen_pending))
+
+    # Run after both columns render so the preview stays disabled during ComfyUI wait.
+    if gen_pending:
+        kind = st.session_state.pop(_SK_GEN_PENDING)
+        ref_files = _limit_ref_images(st.session_state.get("sd_role_ref_image"))
+        with left:
+            _execute_image_generation(pixelle_video, ref_files, kind)
 
 
 # ---------------------------------------------------------------------------
@@ -285,14 +301,14 @@ def _render_edit_form(pixelle_video: Any) -> None:
                 key="sd_role_generate_closeup_btn",
                 width="stretch",
             ):
-                _handle_image_generation(pixelle_video, ref_files, "closeup")
+                _queue_image_generation("closeup")
         with btn_three:
             if st.button(
                 tr("short_drama.role.generate_three_view"),
                 key="sd_role_generate_three_view_btn",
                 width="stretch",
             ):
-                _handle_image_generation(pixelle_video, ref_files, "three_view")
+                _queue_image_generation("three_view")
         with btn_reset:
             if st.button(
                 tr("short_drama.role.reset_form"),
@@ -334,8 +350,200 @@ def _render_prompt_template_buttons() -> None:
 # Right column — preview panel
 # ---------------------------------------------------------------------------
 
+def _preview_thumb_size(kind: str) -> tuple[int, int]:
+    if kind == "three_view":
+        return _ROLE_PREVIEW_THUMB_BY_KIND["three_view"]
+    return _ROLE_PREVIEW_THUMB_BY_KIND["closeup"]
 
-def _render_preview_panel() -> None:
+
+def _preview_image_paths(item: dict) -> list[str]:
+    """Paths for one generation batch (supports legacy single ``image_path``)."""
+    paths = item.get("image_paths")
+    if isinstance(paths, list) and paths:
+        return [str(p) for p in paths if p]
+    legacy = item.get("image_path")
+    if legacy:
+        return [str(legacy)]
+    return []
+
+
+def _preview_selected_index(item: dict, path_count: int) -> int:
+    if path_count <= 0:
+        return -1
+    raw = item.get("selected_image_index", 0)
+    try:
+        idx = int(raw)
+    except (TypeError, ValueError):
+        idx = 0
+    if idx < 0 or idx >= path_count:
+        return 0
+    return idx
+
+
+def _set_preview_selected(preview_idx: int, image_idx: int) -> None:
+    previews = list(st.session_state.get(_SK_PREVIEWS, []))
+    if 0 <= preview_idx < len(previews):
+        paths = _preview_image_paths(previews[preview_idx])
+        if 0 <= image_idx < len(paths):
+            previews[preview_idx]["selected_image_index"] = image_idx
+            st.session_state[_SK_PREVIEWS] = previews
+
+
+@st.cache_data(show_spinner=False)
+def _preview_image_data_uri(image_path: str) -> str:
+    path = Path(image_path)
+    if not path.is_file():
+        return ""
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(path.suffix.lower(), "image/png")
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def _render_preview_thumb_cell(
+    image_path: str,
+    *,
+    thumb_width: int,
+    thumb_height: int,
+    selected: bool,
+) -> None:
+    """Render one fixed-size thumbnail with no grey letterbox background."""
+    data_uri = _preview_image_data_uri(image_path)
+    if not data_uri:
+        st.warning(tr("short_drama.role.err.preview_missing"))
+        return
+    border = "2px solid #ff4b4b" if selected else "1px solid rgba(128,128,128,0.35)"
+    st.markdown(
+        (
+            f'<img src="{data_uri}" alt="" '
+            f'style="width:{thumb_width}px;height:{thumb_height}px;'
+            f'object-fit:contain;display:block;border:{border};'
+            'border-radius:4px;box-sizing:border-box;" />'
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_preview_tile(
+    *,
+    preview_idx: int,
+    image_idx: int,
+    image_path: str,
+    thumb_width: int,
+    thumb_height: int,
+    selected: bool,
+    disabled: bool,
+) -> None:
+    """One fixed-width preview tile: image + two aligned action buttons."""
+    with st.container(width=thumb_width):
+        _render_preview_thumb_cell(
+            image_path,
+            thumb_width=thumb_width,
+            thumb_height=thumb_height,
+            selected=selected,
+        )
+        b1, b2 = st.columns(2, gap="small")
+        with b1:
+            if st.button(
+                tr("short_drama.role.preview_view"),
+                key=f"sd_role_prev_view_{preview_idx}_{image_idx}",
+                width="stretch",
+                disabled=disabled,
+            ):
+                _set_preview_selected(preview_idx, image_idx)
+                role_preview_image_dialog(image_path)
+        with b2:
+            if st.button(
+                tr("short_drama.role.preview_select"),
+                key=f"sd_role_sel_{preview_idx}_{image_idx}",
+                width="stretch",
+                disabled=disabled,
+            ):
+                _set_preview_selected(preview_idx, image_idx)
+                st.rerun()
+
+
+def _render_preview_batch_card(
+    item: dict,
+    preview_idx: int,
+    *,
+    disabled: bool,
+) -> None:
+    """One preview cell: fixed-size thumbnails auto-wrap, each with two actions."""
+    paths = _preview_image_paths(item)
+    if not paths:
+        st.warning(tr("short_drama.role.err.preview_missing"))
+        return
+
+    kind = item.get("generation_kind") or "closeup"
+    thumb_w, thumb_h = _preview_thumb_size(kind)
+    selected_idx = _preview_selected_index(item, len(paths))
+
+    caption = tr(
+        "short_drama.role.preview_caption",
+        cn=item.get("chinese_name") or "-",
+        en=item.get("english_name") or "-",
+        model=item.get("model") or "-",
+        kind=_generation_kind_label(kind),
+        count=len(paths),
+    )
+    st.caption(caption)
+    flow_cls = f"sd-role-preview-flow-{preview_idx}"
+    st.markdown(
+        f"""
+        <div class="{flow_cls}"></div>
+        <style>
+        div.{flow_cls} + div[data-testid="stHorizontalBlock"] {{
+            flex-wrap: wrap !important;
+            gap: {_PREVIEW_THUMB_GAP_PX}px !important;
+            align-items: flex-start !important;
+        }}
+        div.{flow_cls} + div[data-testid="stHorizontalBlock"] > div {{
+            flex: 0 0 auto !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(horizontal=True, gap="small", vertical_alignment="top"):
+        for image_idx, image_path in enumerate(paths):
+            _render_preview_tile(
+                preview_idx=preview_idx,
+                image_idx=image_idx,
+                image_path=image_path,
+                thumb_width=thumb_w,
+                thumb_height=thumb_h,
+                selected=(image_idx == selected_idx),
+                disabled=disabled,
+            )
+
+    if selected_idx >= 0:
+        st.caption(
+            tr("short_drama.role.preview_selected_hint", index=selected_idx + 1)
+        )
+
+    selected_path = paths[selected_idx] if selected_idx >= 0 else ""
+    a, b = st.columns([3, 1])
+    with a:
+        st.caption(
+            tr("short_drama.role.preview_source", path=selected_path or "-")
+        )
+    with b:
+        if st.button(
+            tr("short_drama.role.preview_promote"),
+            key=f"sd_role_promote_{preview_idx}",
+            type="primary",
+            width="stretch",
+            disabled=disabled or selected_idx < 0,
+        ):
+            _promote_preview_to_official(preview_idx)
+
+
+def _render_preview_panel(*, disabled: bool = False) -> None:
     st.markdown(f"#### {tr('short_drama.role.section.preview')}")
     with st.container(border=True):
         previews: list[dict] = st.session_state.get(_SK_PREVIEWS, [])
@@ -345,45 +553,19 @@ def _render_preview_panel() -> None:
             st.markdown("&nbsp;\n\n&nbsp;\n\n&nbsp;", unsafe_allow_html=True)
             return
 
-        # Newest first.
-        for i, item in enumerate(reversed(previews)):
-            idx = len(previews) - 1 - i
-            kind = item.get("generation_kind") or "closeup"
-            st.image(
-                item["image_path"],
-                caption=tr(
-                    "short_drama.role.preview_caption",
-                    cn=item.get("chinese_name") or "-",
-                    en=item.get("english_name") or "-",
-                    model=item.get("model") or "-",
-                    kind=_generation_kind_label(kind),
-                ),
-                width="stretch",
-            )
-            a, b = st.columns([3, 1])
-            with a:
-                st.caption(
-                    tr(
-                        "short_drama.role.preview_source",
-                        path=item["image_path"],
-                    )
-                )
-            with b:
-                if st.button(
-                    tr("short_drama.role.preview_promote"),
-                    key=f"sd_role_promote_{idx}",
-                    type="primary",
-                    width="stretch",
-                ):
-                    _promote_preview_to_official(idx)
-            st.divider()
-
         if st.button(
             tr("short_drama.role.preview_clear"),
             key="sd_role_preview_clear",
+            disabled=disabled,
         ):
             st.session_state[_SK_PREVIEWS] = []
             st.rerun()
+
+        # Newest first.
+        for i, item in enumerate(reversed(previews)):
+            idx = len(previews) - 1 - i
+            _render_preview_batch_card(item, idx, disabled=disabled)
+            st.divider()
 
 
 # ---------------------------------------------------------------------------
@@ -584,7 +766,39 @@ def _handle_save_profile() -> None:
     st.rerun()
 
 
-def _handle_image_generation(
+def _queue_image_generation(kind: GenerationKind) -> None:
+    """Validate form state, then rerun so the preview panel can render disabled first."""
+    cn_name, en_name, _, prompt, model_id = _read_form_fields()
+    if not _validate_names(cn_name, en_name):
+        return
+
+    if not role_store.is_english_name_taken(en_name):
+        _set_edit_error(map_error("profile_save_required"))
+        st.rerun()
+        return
+
+    if not prompt:
+        _set_edit_error(map_error("prompt_empty"))
+        st.rerun()
+        return
+
+    model_info = IMAGE_MODEL_REGISTRY.get(model_id)
+    if model_info is None:
+        _set_edit_error(map_error("model_invalid", name=model_id))
+        st.rerun()
+        return
+
+    workflow_key = get_workflow_key_for_scene(model_info, "role")
+    if not workflow_key:
+        _set_edit_error(map_error("workflow_scene_missing", scene="role"))
+        st.rerun()
+        return
+
+    st.session_state[_SK_GEN_PENDING] = kind
+    st.rerun()
+
+
+def _execute_image_generation(
     pixelle_video: Any,
     ref_files: list,
     kind: GenerationKind,
@@ -626,7 +840,6 @@ def _handle_image_generation(
 
     suffix = GENERATION_PROMPT_SUFFIX.get(kind, "")
     full_prompt = f"{prompt}\n\n{suffix}" if suffix else prompt
-    print(f"full_prompt: {full_prompt}")
     for node in workflow.values():
         inputs = node.get("inputs") if isinstance(node, dict) else None
         if isinstance(inputs, dict) and "prompt" in inputs:
@@ -669,7 +882,7 @@ def _handle_image_generation(
                 _set_edit_error(map_error(gen_err or "no_output", **gen_fmt))
                 st.rerun()
                 return
-            image_local_path = result.paths[0]
+            image_local_paths = result.paths
         except Exception as exc:  # noqa: BLE001 — surface to UI
             logger.exception(exc)
             progress.empty()
@@ -686,7 +899,8 @@ def _handle_image_generation(
     previews: list[dict] = list(st.session_state.get(_SK_PREVIEWS, []))
     previews.append(
         {
-            "image_path": image_local_path,
+            "image_paths": list(image_local_paths),
+            "selected_image_index": 0,
             "chinese_name": cn_name,
             "english_name": en_name,
             "model": model_id,
@@ -718,6 +932,14 @@ def _promote_preview_to_official(preview_index: int) -> None:
         st.rerun()
         return
     item = previews[preview_index]
+    paths = _preview_image_paths(item)
+    sel = _preview_selected_index(item, len(paths))
+    if not paths or sel < 0:
+        st.session_state[_SK_LAST_ERROR] = tr("short_drama.role.preview_none_selected")
+        st.rerun()
+        return
+    temp_image_path = paths[sel]
+
     en_name = (item.get("english_name") or "").strip()
     if not en_name or not role_store.is_english_name_taken(en_name):
         st.session_state[_SK_LAST_ERROR] = map_error("role_missing", name=en_name)
@@ -726,13 +948,17 @@ def _promote_preview_to_official(preview_index: int) -> None:
     kind = item.get("generation_kind") or "closeup"
     ok, err, final_path = role_store.promote_temp_to_role_asset(
         english_name=en_name,
-        temp_image_path=item["image_path"],
+        temp_image_path=temp_image_path,
         asset=kind,
     )
     if not ok:
         st.session_state[_SK_LAST_ERROR] = map_error(err)
         st.rerun()
         return
+
+    for path in paths:
+        if path != temp_image_path:
+            role_store.discard_temp_file(path)
 
     promote_key = (
         "short_drama.role.promote_three_view_success"
@@ -744,7 +970,6 @@ def _promote_preview_to_official(preview_index: int) -> None:
         name=item.get("chinese_name") or en_name,
         path=final_path,
     )
-    # Drop just this preview entry — keep siblings so the user can compare.
     previews.pop(preview_index)
     st.session_state[_SK_PREVIEWS] = previews
     st.rerun()

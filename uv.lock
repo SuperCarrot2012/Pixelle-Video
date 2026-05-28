@@ -1981,6 +1981,8 @@ dependencies = [
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "streamlit" },
+    { name = "streamlit-image-select" },
+    { name = "streamlit-js-eval" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -2014,6 +2016,8 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
     { name = "streamlit", specifier = ">=1.40.0" },
+    { name = "streamlit-image-select", specifier = ">=0.6.0" },
+    { name = "streamlit-js-eval", specifier = ">=1.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
 ]
 provides-extras = ["dev"]
@@ -2982,6 +2986,30 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/31/cc/347730d06e3950e426bf2ee06eaf9b281e18387bffa82bd69aa0f281eee3/streamlit-1.53.1.tar.gz", hash = "sha256:ae656af3b68b4bb2d669fa977606096f2021bcbaa14a454a290f8e0a37bab277", size = 8650843, upload-time = "2026-01-22T21:39:04.087Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/23/c3/5e6f6a9328d57436b658447b6f05969d435df8d31344e34ec75c3044657b/streamlit-1.53.1-py3-none-any.whl", hash = "sha256:9534d151feea485b69200dd36448f95f418c511e8c81186ceb57133bdf1443f7", size = 9111505, upload-time = "2026-01-22T21:39:01.344Z" },
+]
+
+[[package]]
+name = "streamlit-image-select"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/15/b4/819e4c27e983955897d01e987cc91da183e58835c04613c6a0004f0ae331/streamlit-image-select-0.6.0.tar.gz", hash = "sha256:4e64913b17d86f592700f867dc640b8c8dc1282aff78162c7b2b66997a84fe17", size = 696916, upload-time = "2023-03-28T16:55:00.372Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/8c/10ffa4f35b0c61a23990399be10b37fd1d5a4667c8bcd378d81d822562ab/streamlit_image_select-0.6.0-py3-none-any.whl", hash = "sha256:5a87d1b0a1f9010939fea27c569c3a711a028148aa4fb7b8036bf699d9e2b9aa", size = 706724, upload-time = "2023-03-28T16:55:09.09Z" },
+]
+
+[[package]]
+name = "streamlit-js-eval"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/10/43/1403cdd4cafd4df8509e60d04b67bbd2e5fa454c03528d53e337c8022b1f/streamlit_js_eval-1.0.0.tar.gz", hash = "sha256:9e2b2005e3e8a4971d222488a02c880b7b93c8951393ff7f97419ded914498e4", size = 11454, upload-time = "2026-01-09T15:20:18.943Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/40/ae13b0290e89056ea16fbce331a94fa8bfb50cfeb7c1947e61e842636f94/streamlit_js_eval-1.0.0-py3-none-any.whl", hash = "sha256:4876f56dadb6a578615661b43bbec772c93dd4cd12efb2a2310534da06c34dbb", size = 11369, upload-time = "2026-01-09T15:20:17.698Z" },
 ]
 
 [[package]]

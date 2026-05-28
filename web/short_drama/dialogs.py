@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import streamlit as st
+from PIL import Image
 
 from web.i18n import tr
 from web.short_drama.errors import map_error
@@ -119,6 +120,55 @@ def project_delete_dialog(root_path: str) -> None:
 
 
 _SK_EDITING_ROLE = "sd_role_editing_en"
+
+
+@st.dialog(tr("short_drama.role.preview_lightbox_title"), width="large")
+def role_preview_image_dialog(image_path: str) -> None:
+    """Show a full-size preview image (opened from a thumbnail click)."""
+    path = Path(image_path)
+    close_key = f"sd_role_preview_lb_close_{dialog_widget_suffix(image_path)}"
+    if not path.is_file():
+        st.error(map_error("src_missing"))
+    else:
+        try:
+            with Image.open(path) as im:
+                img_w, _img_h = im.size
+        except OSError:
+            img_w = 0
+
+        # Keep enlarged preview fully visible within one viewport when possible.
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"] div[role="dialog"] {
+                width: fit-content !important;
+                max-width: 92vw !important;
+            }
+            div[data-testid="stDialog"] section {
+                width: fit-content !important;
+                max-width: 92vw !important;
+            }
+            div[data-testid="stDialog"] img {
+                max-height: 80vh !important;
+                width: auto !important;
+                object-fit: contain !important;
+                margin: 0 auto !important;
+                display: block !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        if img_w > 0:
+            st.image(str(path.resolve()), width=min(img_w, 1200))
+        else:
+            st.image(str(path.resolve()), use_container_width=True)
+    if st.button(
+        tr("short_drama.role.preview_lightbox_close"),
+        key=close_key,
+        width="stretch",
+    ):
+        st.rerun()
 
 
 @st.dialog(tr("short_drama.role.delete_confirm_title"))

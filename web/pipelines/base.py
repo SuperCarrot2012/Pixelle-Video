@@ -52,6 +52,19 @@ def get_pipeline_ui(name: str) -> PipelineUI:
     """Get a pipeline UI instance by name"""
     return _pipeline_uis.get(name)
 
+# Pipeline names rendered on the Home page tab bar. Others remain registered.
+_HOME_VISIBLE_PIPELINE_NAMES: tuple[str, ...] = ("short_drama",)
+
+
 def get_all_pipeline_uis() -> List[PipelineUI]:
-    """Get all registered pipeline UI instances"""
+    """Get all registered pipeline UI instances."""
     return list(_pipeline_uis.values())
+
+
+def get_visible_pipeline_uis() -> List[PipelineUI]:
+    """Get pipeline UIs that should be rendered on the Home page."""
+    return [
+        _pipeline_uis[name]
+        for name in _HOME_VISIBLE_PIPELINE_NAMES
+        if name in _pipeline_uis
+    ]

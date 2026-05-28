@@ -94,9 +94,11 @@ _ROLE_LATENT_BY_KIND: dict[GenerationKind, tuple[int, int, int]] = {
 # Preview thumbnail size (px); aspect ratio matches ``_ROLE_LATENT_BY_KIND``, fixed per kind.
 _ROLE_PREVIEW_THUMB_BY_KIND: dict[GenerationKind, tuple[int, int]] = {
     "closeup": (270, 480),
-    "three_view": (480, 379),
+    "three_view": (540, 427),
 }
 _PREVIEW_THUMB_GAP_PX = 12
+# Edit form (left) vs preview panel (right) width ratio; e.g. [2, 3] ≈ 40% / 60%.
+_ROLE_EDIT_PREVIEW_COLUMNS: tuple[int, ...] = (2, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +123,7 @@ def render_role_subpage(pixelle_video: Any) -> None:
     st.divider()
 
     gen_pending = st.session_state.get(_SK_GEN_PENDING)
-    left, right = st.columns([1, 1], gap="medium")
+    left, right = st.columns(list(_ROLE_EDIT_PREVIEW_COLUMNS), gap="medium")
     with left:
         _render_edit_form(pixelle_video)
     with right:
@@ -322,28 +324,17 @@ def _render_edit_form(pixelle_video: Any) -> None:
 
 
 def _render_prompt_template_buttons() -> None:
-    """Render preset prompt-template buttons just above the prompt textarea.
-
-    Buttons sit in a fixed N-per-row grid so a single template won't stretch
-    across the whole column; additional templates wrap to the next row.
-    """
+    """Render preset prompt-template buttons just above the prompt textarea."""
     st.caption(tr("short_drama.role.prompt_templates"))
-    buttons_per_row = 8
-    for row_start in range(0, len(PROMPT_TEMPLATES), buttons_per_row):
-        cols = st.columns(buttons_per_row)
-        for j in range(buttons_per_row):
-            idx = row_start + j
-            if idx >= len(PROMPT_TEMPLATES):
-                continue
-            tmpl = PROMPT_TEMPLATES[idx]
-            with cols[j]:
-                if st.button(
-                    tmpl["label"],
-                    key=f"sd_role_tmpl_{tmpl['id']}",
-                    width="stretch",
-                ):
-                    st.session_state[_SK_PROMPT] = tmpl["text"]
-                    st.rerun()
+    with st.container(horizontal=True, gap="small", vertical_alignment="top"):
+        for tmpl in PROMPT_TEMPLATES:
+            if st.button(
+                tmpl["label"],
+                key=f"sd_role_tmpl_{tmpl['id']}",
+                width="content",
+            ):
+                st.session_state[_SK_PROMPT] = tmpl["text"]
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------

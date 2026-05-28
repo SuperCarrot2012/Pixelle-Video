@@ -63,24 +63,20 @@ def main():
     # ========================================================================
     # Pipeline Selection & Delegation
     # ========================================================================
-    from web.pipelines import get_all_pipeline_uis
+    from web.pipelines import get_visible_pipeline_uis
     
-    # Get all registered pipelines
-    pipelines = get_all_pipeline_uis()
-    
-    # Use Tabs for pipeline selection
-    # Note: st.tabs returns a list of containers, one for each tab
+    # Only render pipelines listed in _HOME_VISIBLE_PIPELINE_NAMES (see base.py).
+    pipelines = get_visible_pipeline_uis()
+    if not pipelines:
+        st.warning("No pipeline UI is configured for display.")
+        return
+
     tab_labels = [f"{p.icon} {p.display_name}" for p in pipelines]
     tabs = st.tabs(tab_labels)
-    
-    # Render each pipeline in its corresponding tab
     for i, pipeline in enumerate(pipelines):
         with tabs[i]:
-            # Show description if available
             if pipeline.description:
                 st.caption(pipeline.description)
-            
-            # Delegate rendering
             pipeline.render(pixelle_video)
 
 

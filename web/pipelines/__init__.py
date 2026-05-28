@@ -20,7 +20,8 @@ from web.pipelines.base import (
     PipelineUI,
     register_pipeline_ui,
     get_pipeline_ui,
-    get_all_pipeline_uis
+    get_all_pipeline_uis,
+    get_visible_pipeline_uis,
 )
 
 # Import all pipeline UI modules to ensure they register themselves
@@ -35,5 +36,6 @@ __all__ = [
     "PipelineUI",
     "register_pipeline_ui",
     "get_pipeline_ui",
-    "get_all_pipeline_uis"
+    "get_all_pipeline_uis",
+    "get_visible_pipeline_uis",
 ]

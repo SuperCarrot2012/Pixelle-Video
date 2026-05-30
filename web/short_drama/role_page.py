@@ -47,9 +47,9 @@ from web.short_drama.comfy_service import (
 )
 from web.short_drama.dialogs import (
     role_delete_dialog,
-    role_preview_image_dialog,
 )
 from web.short_drama.errors import map_error
+from web.short_drama.media_server import _MEDIA_PREFIX, register_media_file
 from web.short_drama.models import IMAGE_MODEL_REGISTRY, get_workflow_key_for_scene
 from web.short_drama.prompt_templates import (
     GENERATION_PROMPT_SUFFIX,
@@ -439,9 +439,20 @@ def _preview_thumb_data_uri(thumb_path: str) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
+def _preview_image_url(image_path: str) -> str:
+    token, port = register_media_file(image_path)
+    return f"http://127.0.0.1:{port}/{_MEDIA_PREFIX}{token}"
+
+
+def _lightbox_dom_id(preview_idx: int, image_idx: int) -> str:
+    return f"sd-role-lightbox-{preview_idx}-{image_idx}"
+
+
 def _render_preview_thumb_cell(
     thumb_path: str,
     *,
+    image_url: str,
+    lightbox_id: str,
     thumb_width: int,
     thumb_height: int,
     selected: bool,
@@ -454,10 +465,16 @@ def _render_preview_thumb_cell(
     border = "2px solid #ff4b4b" if selected else "1px solid rgba(128,128,128,0.35)"
     st.markdown(
         (
+            f'<a href="#{lightbox_id}" style="display:block;width:{thumb_width}px;'
+            'line-height:0;text-decoration:none;">'
             f'<img src="{data_uri}" alt="" '
             f'style="width:{thumb_width}px;height:{thumb_height}px;'
             f'object-fit:contain;display:block;border:{border};'
             'border-radius:4px;box-sizing:border-box;" />'
+            '</a>'
+            f'<a id="{lightbox_id}" class="sd-role-lightbox" href="#">'
+            f'<img src="{image_url}" alt="" />'
+            '</a>'
         ),
         unsafe_allow_html=True,
     )
@@ -474,24 +491,20 @@ def _render_preview_tile(
     selected: bool,
     disabled: bool,
 ) -> None:
-    """One fixed-width preview tile: image + two aligned action buttons."""
+    """One fixed-width preview tile: clickable image + centered select button."""
+    image_url = _preview_image_url(image_path)
+    lightbox_id = _lightbox_dom_id(preview_idx, image_idx)
     with st.container(width=thumb_width):
         _render_preview_thumb_cell(
             thumb_path,
+            image_url=image_url,
+            lightbox_id=lightbox_id,
             thumb_width=thumb_width,
             thumb_height=thumb_height,
             selected=selected,
         )
-        b1, b2 = st.columns(2, gap="small")
-        with b1:
-            if st.button(
-                tr("short_drama.role.preview_view"),
-                key=f"sd_role_prev_view_{preview_idx}_{image_idx}",
-                width="stretch",
-                disabled=disabled,
-            ):
-                role_preview_image_dialog(image_path)
-        with b2:
+        _, c_select, _ = st.columns([1, 2, 1], gap="small")
+        with c_select:
             if st.button(
                 tr("short_drama.role.preview_select"),
                 key=f"sd_role_sel_{preview_idx}_{image_idx}",
@@ -541,6 +554,29 @@ def _render_preview_batch_card(
         f"""
         <div class="{flow_cls}"></div>
         <style>
+        .sd-role-lightbox {{
+            position: fixed;
+            inset: 0;
+            z-index: 999999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.86);
+            cursor: zoom-out;
+            padding: 2vh 2vw;
+            box-sizing: border-box;
+        }}
+        .sd-role-lightbox:target {{
+            display: flex;
+        }}
+        .sd-role-lightbox img {{
+            max-width: 96vw;
+            max-height: 96vh;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            box-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
+        }}
         div.{flow_cls} + div[data-testid="stHorizontalBlock"] {{
             flex-wrap: wrap !important;
             gap: {_PREVIEW_THUMB_GAP_PX}px !important;

@@ -185,10 +185,7 @@ def _load_role_into_edit_form(meta: RoleMeta) -> None:
     st.session_state[_SK_CN_NAME] = meta.chinese_name
     st.session_state[_SK_EN_NAME] = meta.english_name
     st.session_state[_SK_DESC] = meta.description
-    if meta.prompt:
-        st.session_state[_SK_PROMPT] = meta.prompt
-    if meta.model and meta.model in IMAGE_MODEL_REGISTRY:
-        st.session_state[_SK_MODEL] = meta.model
+    st.session_state[_SK_PROMPT] = ""
     st.session_state[_SK_EDITING_ROLE] = meta.english_name
 
 
@@ -628,9 +625,18 @@ def _render_preview_batch_card(
                 disabled=disabled,
             )
 
+    promote_label = (
+        tr("short_drama.role.preview_promote_three_view")
+        if kind == "three_view"
+        else tr("short_drama.role.preview_promote_closeup")
+    )
     if selected_idx >= 0:
         st.caption(
-            tr("short_drama.role.preview_selected_hint", index=selected_idx + 1)
+            tr(
+                "short_drama.role.preview_selected_hint",
+                index=selected_idx + 1,
+                action=promote_label,
+            )
         )
 
     selected_path = paths[selected_idx] if selected_idx >= 0 else ""
@@ -641,7 +647,7 @@ def _render_preview_batch_card(
         )
     with b:
         if st.button(
-            tr("short_drama.role.preview_promote"),
+            promote_label,
             key=f"sd_role_promote_{preview_idx}",
             type="primary",
             width="stretch",
@@ -666,6 +672,7 @@ def _render_preview_panel(*, disabled: bool = False) -> None:
             disabled=disabled,
         ):
             st.session_state[_SK_PREVIEWS] = []
+            role_store.clear_temp_dir()
             st.rerun()
 
         # Newest first.
@@ -707,8 +714,6 @@ def _render_role_card(meta: RoleMeta) -> None:
         st.markdown(f"**{meta.chinese_name}** · `{meta.english_name}`")
         if meta.description:
             st.caption(meta.description)
-        if meta.model:
-            st.caption(f"🧠 {meta.model}")
         btn_edit, btn_del = st.columns(2)
         with btn_edit:
             if st.button(
@@ -971,6 +976,7 @@ def _execute_image_generation(
 
     progress = st.progress(0, text=tr("short_drama.role.progress.starting"))
     start = time.time()
+    source_paths: list[str] = []
 
     def _on_progress(value: int, phase: str) -> None:
         phase_text = {
@@ -995,6 +1001,15 @@ def _execute_image_generation(
                 st.rerun()
                 return
             image_local_paths = result.paths
+            for ref_path in ref_paths:
+                ref_src = Path(ref_path)
+                if ref_src.is_file():
+                    cached_ref = role_store.save_bytes_to_temp(
+                        data=ref_src.read_bytes(),
+                        prefer_ext=ref_src.suffix or None,
+                    )
+                    if cached_ref:
+                        source_paths.append(cached_ref)
         except Exception as exc:  # noqa: BLE001 — surface to UI
             logger.exception(exc)
             progress.empty()
@@ -1023,7 +1038,7 @@ def _execute_image_generation(
             "english_name": en_name,
             "model": model_id,
             "prompt": full_prompt,
-            "elapsed_sec": elapsed,
+            "source_path": source_paths,
             "generation_kind": kind,
         }
     )
@@ -1068,15 +1083,17 @@ def _promote_preview_to_official(preview_index: int) -> None:
         english_name=en_name,
         temp_image_path=temp_image_path,
         asset=kind,
+        generation_info={
+            "prompt": item.get("prompt") or "",
+            "model": item.get("model") or "",
+            "generation_kind": kind,
+            "source_path": item.get("source_path") or [],
+        },
     )
     if not ok:
         st.session_state[_SK_LAST_ERROR] = map_error(err)
         st.rerun()
         return
-
-    for path in paths:
-        if path != temp_image_path:
-            role_store.discard_temp_file(path)
 
     promote_key = (
         "short_drama.role.promote_three_view_success"
@@ -1088,6 +1105,4 @@ def _promote_preview_to_official(preview_index: int) -> None:
         name=item.get("chinese_name") or en_name,
         path=final_path,
     )
-    previews.pop(preview_index)
-    st.session_state[_SK_PREVIEWS] = previews
     st.rerun()

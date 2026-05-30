@@ -41,8 +41,8 @@ from typing import Optional
 
 from web.short_drama.work_context import get_work_path
 
-ROLES_DIRNAME = "roles"
 TEMP_DIRNAME = "temp"
+ROLES_DIRNAME = "roles"
 ROLE_METADATA_FILENAME = "role.json"
 ROLE_SCHEMA_VERSION = 1
 
@@ -57,15 +57,15 @@ class RoleMeta:
     chinese_name: str
     english_name: str
     description: str
-    prompt: str
-    model: str
-    ref_image_path: str = ""
-    role_image_path: str = ""
-    three_view_image_path: str = ""
     created_at: str = ""
     updated_at: str = ""
     schema_version: int = ROLE_SCHEMA_VERSION
     extra: dict = field(default_factory=dict)
+
+    @property
+    def role_image_path(self) -> str:
+        closeup = (self.extra or {}).get("closeup_generation") or {}
+        return str(closeup.get("saved_path") or "")
 
 
 def _now_iso() -> str:
@@ -83,17 +83,17 @@ def roles_root() -> Optional[Path]:
 
 
 def temp_root() -> Optional[Path]:
-    base = _project_root()
-    return base / TEMP_DIRNAME if base else None
+    rr = roles_root()
+    return rr / TEMP_DIRNAME if rr else None
 
 
 def ensure_dirs() -> tuple[Optional[Path], Optional[Path]]:
-    """Make sure roles/ and temp/ exist under the active project root."""
+    """Make sure roles/ and roles/temp/ exist under the active project root."""
     base = _project_root()
     if base is None:
         return None, None
     roles_p = base / ROLES_DIRNAME
-    temp_p = base / TEMP_DIRNAME
+    temp_p = roles_p / TEMP_DIRNAME
     roles_p.mkdir(parents=True, exist_ok=True)
     temp_p.mkdir(parents=True, exist_ok=True)
     return roles_p, temp_p
@@ -129,7 +129,7 @@ def list_roles() -> list[RoleMeta]:
         return []
     out: list[RoleMeta] = []
     for entry in rr.iterdir():
-        if not entry.is_dir():
+        if not entry.is_dir() or entry.name == TEMP_DIRNAME:
             continue
         meta = load_role(entry.name)
         if meta is not None:
@@ -155,11 +155,6 @@ def load_role(english_name: str) -> Optional[RoleMeta]:
         chinese_name=str(data.get("chinese_name", "")),
         english_name=str(data.get("english_name", english_name)),
         description=str(data.get("description", "")),
-        prompt=str(data.get("prompt", "")),
-        model=str(data.get("model", "")),
-        ref_image_path=str(data.get("ref_image_path", "")),
-        role_image_path=str(data.get("role_image_path", "")),
-        three_view_image_path=str(data.get("three_view_image_path", "")),
         created_at=str(data.get("created_at", "")),
         updated_at=str(data.get("updated_at", "")),
         schema_version=int(data.get("schema_version", ROLE_SCHEMA_VERSION)),
@@ -211,10 +206,6 @@ def create_role(
         chinese_name=cn,
         english_name=en,
         description=(description or "").strip(),
-        prompt="",
-        model="",
-        ref_image_path="",
-        role_image_path="",
         created_at=now,
         updated_at=now,
     )
@@ -316,7 +307,7 @@ def save_bytes_to_temp(
     prefer_ext: Optional[str] = None,
     original_filename: Optional[str] = None,
 ) -> Optional[str]:
-    """Save raw bytes to <project>/temp/<sha1>.<ext> and return absolute path.
+    """Save raw bytes to <project>/roles/temp/<sha1>.<ext> and return absolute path.
 
     Returns None if no active project.
     """
@@ -377,6 +368,60 @@ def discard_temp_file(path: Optional[str]) -> None:
         pass
 
 
+def clear_temp_dir() -> bool:
+    """Remove all role-generation temp files under <project>/roles/temp/."""
+    temp_p = temp_root()
+    if temp_p is None:
+        return False
+    if temp_p.is_dir():
+        try:
+            shutil.rmtree(temp_p)
+        except OSError:
+            return False
+    try:
+        temp_p.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return True
+
+
+def _normalise_source_paths(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        return [str(path) for path in raw if path]
+    if raw:
+        return [str(raw)]
+    return []
+
+
+def _promote_source_images(
+    role_dir: Path,
+    english_name: str,
+    asset_suffix: str,
+    source_paths: list[str],
+) -> tuple[Optional[list[str]], str]:
+    """Copy reference images into the role dir and return persisted paths."""
+    for prev in role_dir.glob(f"{english_name}-{asset_suffix}-source-*"):
+        if prev.is_file():
+            try:
+                prev.unlink()
+            except OSError:
+                return None, "copy_failed"
+
+    copied: list[str] = []
+    for idx, source_path in enumerate(source_paths):
+        src = Path(source_path)
+        if not src.is_file():
+            continue
+        ext = src.suffix.lower() or ".png"
+        dst = role_dir / f"{english_name}-{asset_suffix}-source-{idx}{ext}"
+        try:
+            shutil.copy2(src, dst)
+        except OSError:
+            return None, "copy_failed"
+        copied.append(str(dst.resolve()))
+    return copied, ""
+
+
 def promote_temp_to_role_image(
     english_name: str,
     temp_image_path: str,
@@ -390,10 +435,11 @@ def promote_temp_to_role_asset(
     temp_image_path: str,
     *,
     asset: str = "closeup",
+    generation_info: Optional[dict] = None,
 ) -> tuple[bool, str, str]:
     """Copy a temp preview image into the role directory.
 
-    ``asset`` is ``closeup`` (``role.<ext>``) or ``three_view`` (``three_view.<ext>``).
+    ``asset`` is ``closeup`` or ``three_view``.
 
     Returns (ok, error_key, final_path).
     """
@@ -409,11 +455,10 @@ def promote_temp_to_role_asset(
     if not src.is_file():
         return False, "src_missing", ""
 
-    stem = "role" if asset == "closeup" else "three_view"
-    ext = src.suffix.lower() or ".png"
-    dst = d / f"{stem}{ext}"
+    suffix = "closeup" if asset == "closeup" else "three-view"
+    dst = d / f"{english_name}-{suffix}.png"
 
-    for prev in d.glob(f"{stem}.*"):
+    for prev in d.glob(f"{english_name}-{suffix}.*"):
         if prev != dst:
             try:
                 prev.unlink()
@@ -429,10 +474,23 @@ def promote_temp_to_role_asset(
     if meta is None:
         return False, "role_not_found", ""
     resolved = str(dst.resolve())
-    if asset == "closeup":
-        meta.role_image_path = resolved
-    else:
-        meta.three_view_image_path = resolved
+    meta.extra = dict(meta.extra or {})
+    source_paths = _normalise_source_paths((generation_info or {}).get("source_path"))
+    promoted_sources, source_err = _promote_source_images(
+        d,
+        english_name,
+        suffix,
+        source_paths,
+    )
+    if promoted_sources is None:
+        return False, source_err, ""
+    meta.extra[f"{asset}_generation"] = {
+        "generation_kind": asset,
+        "prompt": str((generation_info or {}).get("prompt") or ""),
+        "model": str((generation_info or {}).get("model") or ""),
+        "source_path": promoted_sources,
+        "saved_path": resolved,
+    }
     meta.updated_at = _now_iso()
     if not _write_metadata(meta):
         return False, "role_write_failed", ""

@@ -83,7 +83,7 @@ def get_pixelle_video():
         logger.info("✅ PixelleVideoCore initialized and cached")
     else:
         pixelle_video = st.session_state.pixelle_video
-        logger.debug("Reusing cached PixelleVideoCore instance")
+        # logger.debug("Reusing cached PixelleVideoCore instance")
     
     return pixelle_video
 

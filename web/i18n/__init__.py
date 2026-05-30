@@ -53,7 +53,7 @@ def set_language(lang_code: str):
     global _current_language
     if lang_code in _locales:
         _current_language = lang_code
-        logger.debug(f"Language set to: {lang_code}")
+        # logger.debug(f"Language set to: {lang_code}")
     else:
         logger.warning(f"Language {lang_code} not found, keeping {_current_language}")
 

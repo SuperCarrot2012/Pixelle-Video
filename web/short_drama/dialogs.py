@@ -19,7 +19,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image
 
 from web.i18n import tr
 from web.short_drama.errors import map_error
@@ -130,12 +129,6 @@ def role_preview_image_dialog(image_path: str) -> None:
     if not path.is_file():
         st.error(map_error("src_missing"))
     else:
-        try:
-            with Image.open(path) as im:
-                img_w, _img_h = im.size
-        except OSError:
-            img_w = 0
-
         # Keep enlarged preview fully visible within one viewport when possible.
         st.markdown(
             """
@@ -159,10 +152,7 @@ def role_preview_image_dialog(image_path: str) -> None:
             """,
             unsafe_allow_html=True,
         )
-        if img_w > 0:
-            st.image(str(path.resolve()), width=min(img_w, 1200))
-        else:
-            st.image(str(path.resolve()), use_container_width=True)
+        st.image(str(path.resolve()))
     if st.button(
         tr("short_drama.role.preview_lightbox_close"),
         key=close_key,

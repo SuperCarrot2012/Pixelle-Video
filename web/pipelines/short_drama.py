@@ -14,13 +14,13 @@
 Short Drama Pipeline — top-level entry & registration.
 
 All feature implementations live under ``web/short_drama``; this module
-only wires the pipeline into the registry and dispatches the five sub-tabs
+only wires the pipeline into the registry and dispatches the five subpages
 (项目 / 角色 / 道具 / 场景 / 分镜) to their dedicated render functions.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import streamlit as st
 
@@ -33,6 +33,61 @@ from web.short_drama.subpages import (
     render_scene_subpage,
     render_storyboard_subpage,
 )
+
+_SK_ACTIVE_SUBPAGE = "short_drama_active_subpage"
+
+
+def _subpage_specs() -> dict[str, tuple[str, Callable[[Any], None]]]:
+    return {
+        "project": (
+            tr("pipeline.short_drama.sub.project"),
+            render_project_subpage,
+        ),
+        "character": (
+            tr("pipeline.short_drama.sub.character"),
+            render_role_subpage,
+        ),
+        "props": (
+            tr("pipeline.short_drama.sub.props"),
+            render_props_subpage,
+        ),
+        "scene": (
+            tr("pipeline.short_drama.sub.scene"),
+            render_scene_subpage,
+        ),
+        "storyboard": (
+            tr("pipeline.short_drama.sub.storyboard"),
+            render_storyboard_subpage,
+        ),
+    }
+
+
+def _render_subpage_nav(specs: dict[str, tuple[str, Callable[[Any], None]]]) -> str:
+    """Render short-drama subpage navigation without executing every subpage."""
+    options = list(specs.keys())
+    if st.session_state.get(_SK_ACTIVE_SUBPAGE) not in options:
+        st.session_state[_SK_ACTIVE_SUBPAGE] = options[0]
+
+    format_func = lambda key: specs[key][0]
+    segmented_control = getattr(st, "segmented_control", None)
+    if segmented_control is not None:
+        active = segmented_control(
+            tr("pipeline.short_drama.name"),
+            options=options,
+            format_func=format_func,
+            key=_SK_ACTIVE_SUBPAGE,
+            label_visibility="collapsed",
+        )
+    else:
+        active = st.radio(
+            tr("pipeline.short_drama.name"),
+            options=options,
+            format_func=format_func,
+            key=_SK_ACTIVE_SUBPAGE,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+    return active or options[0]
 
 
 class ShortDramaPipelineUI(PipelineUI):
@@ -47,25 +102,9 @@ class ShortDramaPipelineUI(PipelineUI):
         return tr("pipeline.short_drama.name")
 
     def render(self, pixelle_video: Any) -> None:
-        project_tab, character_tab, props_tab, scene_tab, storyboard_tab = st.tabs(
-            [
-                tr("pipeline.short_drama.sub.project"),
-                tr("pipeline.short_drama.sub.character"),
-                tr("pipeline.short_drama.sub.props"),
-                tr("pipeline.short_drama.sub.scene"),
-                tr("pipeline.short_drama.sub.storyboard"),
-            ]
-        )
-        with project_tab:
-            render_project_subpage(pixelle_video)
-        with character_tab:
-            render_role_subpage(pixelle_video)
-        with props_tab:
-            render_props_subpage(pixelle_video)
-        with scene_tab:
-            render_scene_subpage(pixelle_video)
-        with storyboard_tab:
-            render_storyboard_subpage(pixelle_video)
+        specs = _subpage_specs()
+        active = _render_subpage_nav(specs)
+        specs[active][1](pixelle_video)
 
 
 register_pipeline_ui(ShortDramaPipelineUI)

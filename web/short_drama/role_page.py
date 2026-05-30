@@ -45,7 +45,10 @@ from web.short_drama.comfy_service import (
     load_workflow,
     upload_image_to_comfy,
 )
-from web.short_drama.dialogs import role_delete_dialog, role_preview_image_dialog
+from web.short_drama.dialogs import (
+    role_delete_dialog,
+    role_preview_image_dialog,
+)
 from web.short_drama.errors import map_error
 from web.short_drama.models import IMAGE_MODEL_REGISTRY, get_workflow_key_for_scene
 from web.short_drama.prompt_templates import (
@@ -487,7 +490,6 @@ def _render_preview_tile(
                 width="stretch",
                 disabled=disabled,
             ):
-                _set_preview_selected(preview_idx, image_idx)
                 role_preview_image_dialog(image_path)
         with b2:
             if st.button(

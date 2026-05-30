@@ -29,12 +29,14 @@ Implementation notes:
 from __future__ import annotations
 
 import base64
+import html
 import random
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 import streamlit as st
+import streamlit.components.v1 as components
 from loguru import logger
 from PIL import Image, ImageOps
 
@@ -76,6 +78,8 @@ _SK_LAST_SUCCESS = "sd_role_last_success"
 _SK_EDIT_ERROR = "sd_role_edit_error"
 _SK_EDIT_SUCCESS = "sd_role_edit_success"
 _SK_EDITING_ROLE = "sd_role_editing_en"  # english_name when editing existing role
+_SK_PREVIEW_MODE = "sd_role_preview_mode"
+_SK_PREVIEW_MODE_WIDGET = "sd_role_preview_mode_widget"
 _SK_RESET_PENDING = "sd_role_reset_pending"
 _SK_GEN_PENDING = "sd_role_gen_pending"  # GenerationKind while awaiting ComfyUI
 
@@ -104,6 +108,8 @@ _ROLE_PREVIEW_THUMB_BY_KIND: dict[GenerationKind, tuple[int, int]] = {
 _PREVIEW_THUMB_GAP_PX = 12
 # Edit form (left) vs preview panel (right) width ratio; e.g. [2, 3] ≈ 40% / 60%.
 _ROLE_EDIT_PREVIEW_COLUMNS: tuple[int, ...] = (2, 3)
+_ROLE_PREVIEW_MODE_GENERATION = "generation"
+_ROLE_PREVIEW_MODE_ROLE = "role"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +138,7 @@ def render_role_subpage(pixelle_video: Any) -> None:
     with left:
         _render_edit_form(pixelle_video)
     with right:
-        _render_preview_panel(disabled=bool(gen_pending))
+        _render_right_preview_area(disabled=bool(gen_pending))
 
     # Run after both columns render so the preview stays disabled during ComfyUI wait.
     if gen_pending:
@@ -187,6 +193,8 @@ def _load_role_into_edit_form(meta: RoleMeta) -> None:
     st.session_state[_SK_DESC] = meta.description
     st.session_state[_SK_PROMPT] = ""
     st.session_state[_SK_EDITING_ROLE] = meta.english_name
+    st.session_state[_SK_PREVIEW_MODE] = _ROLE_PREVIEW_MODE_ROLE
+    st.session_state.pop(_SK_PREVIEW_MODE_WIDGET, None)
 
 
 def _editing_english_name() -> str:
@@ -199,6 +207,8 @@ def _reset_edit_form() -> None:
     Must run before any keyed widgets in ``_render_edit_form`` are drawn.
     """
     st.session_state.pop(_SK_EDITING_ROLE, None)
+    st.session_state[_SK_PREVIEW_MODE] = _ROLE_PREVIEW_MODE_GENERATION
+    st.session_state.pop(_SK_PREVIEW_MODE_WIDGET, None)
     st.session_state[_SK_CN_NAME] = ""
     st.session_state[_SK_EN_NAME] = ""
     st.session_state[_SK_DESC] = ""
@@ -360,7 +370,6 @@ def _render_prompt_template_buttons() -> None:
                 width="content",
             ):
                 st.session_state[_SK_PROMPT] = tmpl["text"]
-                st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +428,15 @@ def _thumbnail_path_for(image_path: str, width: int, height: int) -> Path:
     return path.with_name(f"{path.stem}.thumb_{width}x{height}.jpg")
 
 
+def _file_signature(path: str) -> tuple[str, int, int]:
+    p = Path(path)
+    try:
+        stat = p.stat()
+    except OSError:
+        return str(p.resolve()), 0, 0
+    return str(p.resolve()), stat.st_mtime_ns, stat.st_size
+
+
 def _ensure_preview_thumbnail(image_path: str, width: int, height: int) -> str:
     """Create a lightweight fixed-size thumbnail for the preview grid."""
     path = Path(image_path)
@@ -426,8 +444,11 @@ def _ensure_preview_thumbnail(image_path: str, width: int, height: int) -> str:
         return image_path
 
     thumb = _thumbnail_path_for(image_path, width, height)
-    if thumb.is_file():
-        return str(thumb.resolve())
+    try:
+        if thumb.is_file() and thumb.stat().st_mtime_ns >= path.stat().st_mtime_ns:
+            return str(thumb.resolve())
+    except OSError:
+        pass
 
     try:
         with Image.open(path) as im:
@@ -447,7 +468,8 @@ def _ensure_preview_thumbnail(image_path: str, width: int, height: int) -> str:
 
 
 @st.cache_data(show_spinner=False)
-def _preview_thumb_data_uri(thumb_path: str) -> str:
+def _preview_thumb_data_uri(thumb_signature: tuple[str, int, int]) -> str:
+    thumb_path = thumb_signature[0]
     path = Path(thumb_path)
     if not path.is_file():
         return ""
@@ -466,7 +488,7 @@ def _preview_image_url(image_path: str) -> str:
     return f"http://127.0.0.1:{port}/{_MEDIA_PREFIX}{token}"
 
 
-def _lightbox_dom_id(preview_idx: int, image_idx: int) -> str:
+def _lightbox_dom_id(preview_idx: int | str, image_idx: int | str) -> str:
     return f"sd-role-lightbox-{preview_idx}-{image_idx}"
 
 
@@ -480,7 +502,7 @@ def _render_preview_thumb_cell(
     selected: bool,
 ) -> None:
     """Render one fixed-size thumbnail with no grey letterbox background."""
-    data_uri = _preview_thumb_data_uri(thumb_path)
+    data_uri = _preview_thumb_data_uri(_file_signature(thumb_path))
     if not data_uri:
         st.warning(tr("short_drama.role.err.preview_missing"))
         return
@@ -498,6 +520,39 @@ def _render_preview_thumb_cell(
             f'<img src="{image_url}" alt="" />'
             '</a>'
         ),
+        unsafe_allow_html=True,
+    )
+
+
+def _inject_role_lightbox_style() -> None:
+    st.markdown(
+        """
+        <style>
+        .sd-role-lightbox {
+            position: fixed;
+            inset: 0;
+            z-index: 999999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.86);
+            cursor: zoom-out;
+            padding: 2vh 2vw;
+            box-sizing: border-box;
+        }
+        .sd-role-lightbox:target {
+            display: flex;
+        }
+        .sd-role-lightbox img {
+            max-width: 96vw;
+            max-height: 96vh;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            box-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
+        }
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -572,33 +627,11 @@ def _render_preview_batch_card(
     )
     st.caption(caption)
     flow_cls = f"sd-role-preview-flow-{preview_idx}"
+    _inject_role_lightbox_style()
     st.markdown(
         f"""
         <div class="{flow_cls}"></div>
         <style>
-        .sd-role-lightbox {{
-            position: fixed;
-            inset: 0;
-            z-index: 999999;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            background: rgba(0, 0, 0, 0.86);
-            cursor: zoom-out;
-            padding: 2vh 2vw;
-            box-sizing: border-box;
-        }}
-        .sd-role-lightbox:target {{
-            display: flex;
-        }}
-        .sd-role-lightbox img {{
-            max-width: 96vw;
-            max-height: 96vh;
-            width: auto;
-            height: auto;
-            object-fit: contain;
-            box-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
-        }}
         div.{flow_cls} + div[data-testid="stHorizontalBlock"] {{
             flex-wrap: wrap !important;
             gap: {_PREVIEW_THUMB_GAP_PX}px !important;
@@ -656,7 +689,40 @@ def _render_preview_batch_card(
             _promote_preview_to_official(preview_idx)
 
 
-def _render_preview_panel(*, disabled: bool = False) -> None:
+def _sync_preview_mode_from_widget() -> None:
+    value = st.session_state.get(_SK_PREVIEW_MODE_WIDGET)
+    if value in (_ROLE_PREVIEW_MODE_GENERATION, _ROLE_PREVIEW_MODE_ROLE):
+        st.session_state[_SK_PREVIEW_MODE] = value
+
+
+def _render_right_preview_area(*, disabled: bool = False) -> None:
+    options = [_ROLE_PREVIEW_MODE_GENERATION, _ROLE_PREVIEW_MODE_ROLE]
+    _sync_preview_mode_from_widget()
+    mode = st.session_state.get(_SK_PREVIEW_MODE)
+    if mode not in options:
+        mode = _ROLE_PREVIEW_MODE_GENERATION
+        st.session_state[_SK_PREVIEW_MODE] = mode
+    if st.session_state.get(_SK_PREVIEW_MODE_WIDGET) not in options:
+        st.session_state[_SK_PREVIEW_MODE_WIDGET] = mode
+    st.segmented_control(
+        tr("short_drama.role.preview_mode_label"),
+        options=options,
+        format_func=lambda key: {
+            _ROLE_PREVIEW_MODE_GENERATION: tr("short_drama.role.preview_mode_generation"),
+            _ROLE_PREVIEW_MODE_ROLE: tr("short_drama.role.preview_mode_role"),
+        }[key],
+        key=_SK_PREVIEW_MODE_WIDGET,
+        on_change=_sync_preview_mode_from_widget,
+        label_visibility="collapsed",
+    )
+    mode = st.session_state.get(_SK_PREVIEW_MODE, mode)
+    if mode == _ROLE_PREVIEW_MODE_ROLE:
+        _render_role_preview_panel()
+    else:
+        _render_generation_preview_panel(disabled=disabled)
+
+
+def _render_generation_preview_panel(*, disabled: bool = False) -> None:
     st.markdown(f"#### {tr('short_drama.role.section.preview')}")
     with st.container(border=True):
         previews: list[dict] = st.session_state.get(_SK_PREVIEWS, [])
@@ -680,6 +746,84 @@ def _render_preview_panel(*, disabled: bool = False) -> None:
             idx = len(previews) - 1 - i
             _render_preview_batch_card(item, idx, disabled=disabled)
             st.divider()
+
+
+def _render_role_preview_panel() -> None:
+    st.markdown(f"#### {tr('short_drama.role.section.role_preview')}")
+    editing_en = _editing_english_name()
+    if not editing_en:
+        st.info(tr("short_drama.role.role_preview_no_role"))
+        return
+    meta = role_store.load_role(editing_en)
+    if meta is None:
+        st.warning(map_error("role_missing", name=editing_en))
+        return
+    with st.container(border=True):
+        _render_role_asset_preview(
+            tr("short_drama.role.gen_kind.closeup"),
+            "closeup",
+            meta.extra.get("closeup_generation") or {},
+            meta.role_image_path,
+        )
+        st.divider()
+        _render_role_asset_preview(
+            tr("short_drama.role.gen_kind.three_view"),
+            "three_view",
+            meta.extra.get("three_view_generation") or {},
+            meta.three_view_image_path,
+        )
+
+
+def _render_role_asset_preview(
+    title: str,
+    asset_key: str,
+    generation: dict,
+    image_path: str,
+) -> None:
+    st.caption(title)
+    if image_path and Path(image_path).is_file():
+        _inject_role_lightbox_style()
+        thumb_w, thumb_h = _preview_thumb_size(asset_key)
+        thumb_path = _ensure_preview_thumbnail(image_path, thumb_w, thumb_h)
+        _render_preview_thumb_cell(
+            thumb_path,
+            image_url=_preview_image_url(image_path),
+            lightbox_id=_lightbox_dom_id("role", asset_key),
+            thumb_width=thumb_w,
+            thumb_height=thumb_h,
+            selected=False,
+        )
+        st.caption(
+            tr(
+                "short_drama.role.role_preview_model",
+                model=generation.get("model") or "-",
+            )
+        )
+        st.caption(tr("short_drama.role.role_preview_saved_path", path=image_path))
+        st.caption(
+            tr(
+                "short_drama.role.role_preview_source_paths",
+                paths=", ".join(generation.get("source_path") or []) or "-",
+            )
+        )
+        prompt = str(generation.get("prompt") or "").strip()
+        if prompt:
+            label = html.escape(tr("short_drama.role.role_preview_prompt"))
+            value = html.escape(prompt, quote=True)
+            components.html(
+                f"""
+                <label style="display:block;font-size:0.875rem;margin:0 0 0.25rem 0;">
+                    {label}
+                </label>
+                <textarea readonly style="width:100%;height:160px;resize:vertical;
+                    border:1px solid rgba(49,51,63,0.2);border-radius:0.5rem;
+                    padding:0.5rem;background:transparent;color:inherit;
+                    font:inherit;cursor:text;box-sizing:border-box;">{value}</textarea>
+                """,
+                height=205,
+            )
+    else:
+        st.info(tr("short_drama.role.role_preview_empty_asset", kind=title))
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +866,6 @@ def _render_role_card(meta: RoleMeta) -> None:
                 width="stretch",
             ):
                 _load_role_into_edit_form(meta)
-                st.rerun()
         with btn_del:
             if st.button(
                 tr("short_drama.role.delete"),
@@ -881,6 +1024,8 @@ def _handle_save_profile() -> None:
 
 def _queue_image_generation(kind: GenerationKind) -> None:
     """Validate form state, then rerun so the preview panel can render disabled first."""
+    st.session_state[_SK_PREVIEW_MODE] = _ROLE_PREVIEW_MODE_GENERATION
+    st.session_state.pop(_SK_PREVIEW_MODE_WIDGET, None)
     cn_name, en_name, _, prompt, model_id = _read_form_fields()
     if not _validate_names(cn_name, en_name):
         return

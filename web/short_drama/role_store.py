@@ -67,6 +67,11 @@ class RoleMeta:
         closeup = (self.extra or {}).get("closeup_generation") or {}
         return str(closeup.get("saved_path") or "")
 
+    @property
+    def three_view_image_path(self) -> str:
+        three_view = (self.extra or {}).get("three_view_generation") or {}
+        return str(three_view.get("saved_path") or "")
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")

@@ -463,6 +463,8 @@
     "short_drama.role.ref_image_too_many": "参考图最多上传 {max} 张，已仅保留前 {max} 张用于生成。",
     "short_drama.role.model": "生成模型",
     "short_drama.role.model_help": "目前仅支持 Qwen-Image-Edit-2511，后续会扩展更多模型。",
+    "short_drama.role.batch_size": "生成数量",
+    "short_drama.role.batch_size_help": "每次生成的图片数量（1-4）。",
     "short_drama.role.save_profile": "📁 保存角色档案",
     "short_drama.role.generate_closeup": "🎨 生成特写",
     "short_drama.role.generate_three_view": "📐 生成三视图",

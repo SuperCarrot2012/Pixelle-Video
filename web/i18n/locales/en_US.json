@@ -463,6 +463,8 @@
     "short_drama.role.ref_image_too_many": "You can upload at most {max} reference images; only the first {max} will be used for generation.",
     "short_drama.role.model": "Model",
     "short_drama.role.model_help": "Only Qwen-Image-Edit-2511 is wired in for now.",
+    "short_drama.role.batch_size": "Image Count",
+    "short_drama.role.batch_size_help": "Number of images generated per run (1-4).",
     "short_drama.role.save_profile": "📁 Save profile",
     "short_drama.role.generate_closeup": "🎨 Close-up",
     "short_drama.role.generate_three_view": "📐 Three-view",

@@ -69,6 +69,7 @@ _SK_CN_NAME = "sd_role_cn_name"
 _SK_EN_NAME = "sd_role_en_name"
 _SK_DESC = "sd_role_desc"
 _SK_MODEL = "sd_role_model"
+_SK_BATCH_SIZE = "sd_role_batch_size"
 _SK_PREVIEWS = "sd_role_previews"  # list[dict]
 _SK_LAST_ERROR = "sd_role_last_error"
 _SK_LAST_SUCCESS = "sd_role_last_success"
@@ -90,10 +91,10 @@ _QWEN_ROLE_REF_SLOTS: tuple[tuple[str, str], ...] = (
 # qwen-image-edit-2511-roles.json — 生成前动态覆盖（按需修改）
 _QWEN_ROLE_KSAMPLER_NODE_ID = "13"
 _QWEN_ROLE_EMPTY_LATENT_NODE_ID = "16"
-# EmptyLatentImage: (width, height, batch_size) per generation kind (model-agnostic)
-_ROLE_LATENT_BY_KIND: dict[GenerationKind, tuple[int, int, int]] = {
-    "closeup": (1440, 2560, 4),
-    "three_view": (3240, 2560, 4),
+# EmptyLatentImage: (width, height) per generation kind (model-agnostic).
+_ROLE_LATENT_BY_KIND: dict[GenerationKind, tuple[int, int]] = {
+    "closeup": (1440, 2560),
+    "three_view": (3240, 2560),
 }
 # Preview thumbnail size (px); aspect ratio matches ``_ROLE_LATENT_BY_KIND``, fixed per kind.
 _ROLE_PREVIEW_THUMB_BY_KIND: dict[GenerationKind, tuple[int, int]] = {
@@ -208,8 +209,19 @@ def _reset_edit_form() -> None:
     st.session_state.pop("sd_role_ref_image", None)
     st.session_state.pop("sd_role_model_select", None)
     st.session_state[_SK_MODEL] = next(iter(IMAGE_MODEL_REGISTRY))
+    st.session_state.pop("sd_role_batch_size_select", None)
+    st.session_state[_SK_BATCH_SIZE] = 1
     st.session_state.pop(_SK_EDIT_ERROR, None)
     st.session_state.pop(_SK_EDIT_SUCCESS, None)
+
+
+def _read_generation_batch_size() -> int:
+    raw = st.session_state.get(_SK_BATCH_SIZE, 1)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(4, value))
 
 
 def _apply_pending_edit_form_reset() -> None:
@@ -284,14 +296,27 @@ def _render_edit_form(pixelle_video: Any) -> None:
         default_index = 0
         if _SK_MODEL in st.session_state and st.session_state[_SK_MODEL] in model_keys:
             default_index = model_keys.index(st.session_state[_SK_MODEL])
-        chosen_label = st.selectbox(
-            tr("short_drama.role.model"),
-            options=model_labels,
-            index=default_index,
-            help=tr("short_drama.role.model_help"),
-            key="sd_role_model_select",
-        )
+        batch_options = [1, 2, 3, 4]
+        default_batch = _read_generation_batch_size()
+        model_col, batch_col = st.columns([3, 1], gap="small")
+        with model_col:
+            chosen_label = st.selectbox(
+                tr("short_drama.role.model"),
+                options=model_labels,
+                index=default_index,
+                help=tr("short_drama.role.model_help"),
+                key="sd_role_model_select",
+            )
+        with batch_col:
+            chosen_batch = st.selectbox(
+                tr("short_drama.role.batch_size"),
+                options=batch_options,
+                index=batch_options.index(default_batch),
+                help=tr("short_drama.role.batch_size_help"),
+                key="sd_role_batch_size_select",
+            )
         st.session_state[_SK_MODEL] = model_keys[model_labels.index(chosen_label)]
+        st.session_state[_SK_BATCH_SIZE] = int(chosen_batch)
 
         btn_profile, btn_closeup, btn_three, btn_reset = st.columns(4)
         with btn_profile:
@@ -778,22 +803,23 @@ def _configure_workflow_ref_slots(
 def _apply_role_workflow_generation_params(
     workflow: dict[str, Any],
     kind: GenerationKind,
+    batch_size: int,
 ) -> None:
-    """Override KSampler seed (random) and EmptyLatentImage size by generation kind."""
+    """Override seed and EmptyLatentImage size/batch params before execution."""
     sampler = workflow.get(_QWEN_ROLE_KSAMPLER_NODE_ID)
     if isinstance(sampler, dict):
         inputs = sampler.get("inputs")
         if isinstance(inputs, dict):
             inputs["seed"] = random.randint(0, 2**63 - 1)
 
-    width, height, batch_size = _ROLE_LATENT_BY_KIND[kind]
+    width, height = _ROLE_LATENT_BY_KIND[kind]
     latent = workflow.get(_QWEN_ROLE_EMPTY_LATENT_NODE_ID)
     if isinstance(latent, dict):
         inputs = latent.get("inputs")
         if isinstance(inputs, dict):
             inputs["width"] = width
             inputs["height"] = height
-            inputs["batch_size"] = batch_size
+            inputs["batch_size"] = max(1, min(4, int(batch_size)))
 
 
 def _prepare_refs_for_comfy(ref_files: list) -> list[str]:
@@ -937,7 +963,11 @@ def _execute_image_generation(
             return
         workflow[node_id]["inputs"]["image"] = comfy_name
 
-    _apply_role_workflow_generation_params(workflow, kind)
+    _apply_role_workflow_generation_params(
+        workflow,
+        kind,
+        batch_size=_read_generation_batch_size(),
+    )
 
     progress = st.progress(0, text=tr("short_drama.role.progress.starting"))
     start = time.time()

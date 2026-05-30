@@ -36,6 +36,7 @@ from typing import Any, Optional
 
 import streamlit as st
 from loguru import logger
+from PIL import Image, ImageOps
 
 from web.i18n import tr
 from web.short_drama import role_store
@@ -358,6 +359,14 @@ def _preview_image_paths(item: dict) -> list[str]:
     return []
 
 
+def _preview_thumb_paths(item: dict) -> list[str]:
+    """Thumbnail paths for display; falls back to originals for legacy previews."""
+    thumbs = item.get("thumb_paths")
+    if isinstance(thumbs, list) and thumbs:
+        return [str(p) for p in thumbs if p]
+    return _preview_image_paths(item)
+
+
 def _preview_selected_index(item: dict, path_count: int) -> int:
     if path_count <= 0:
         return -1
@@ -380,9 +389,41 @@ def _set_preview_selected(preview_idx: int, image_idx: int) -> None:
             st.session_state[_SK_PREVIEWS] = previews
 
 
-@st.cache_data(show_spinner=False)
-def _preview_image_data_uri(image_path: str) -> str:
+def _thumbnail_path_for(image_path: str, width: int, height: int) -> Path:
     path = Path(image_path)
+    return path.with_name(f"{path.stem}.thumb_{width}x{height}.jpg")
+
+
+def _ensure_preview_thumbnail(image_path: str, width: int, height: int) -> str:
+    """Create a lightweight fixed-size thumbnail for the preview grid."""
+    path = Path(image_path)
+    if not path.is_file():
+        return image_path
+
+    thumb = _thumbnail_path_for(image_path, width, height)
+    if thumb.is_file():
+        return str(thumb.resolve())
+
+    try:
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im.thumbnail((width, height), Image.Resampling.LANCZOS)
+
+            canvas = Image.new("RGB", (width, height), (255, 255, 255))
+            left = (width - im.width) // 2
+            top = (height - im.height) // 2
+            canvas.paste(im, (left, top))
+            canvas.save(thumb, "JPEG", quality=88, optimize=True)
+    except OSError:
+        logger.exception("Failed to create preview thumbnail: {}", image_path)
+        return image_path
+
+    return str(thumb.resolve())
+
+
+@st.cache_data(show_spinner=False)
+def _preview_thumb_data_uri(thumb_path: str) -> str:
+    path = Path(thumb_path)
     if not path.is_file():
         return ""
     mime = {
@@ -390,20 +431,20 @@ def _preview_image_data_uri(image_path: str) -> str:
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".webp": "image/webp",
-    }.get(path.suffix.lower(), "image/png")
+    }.get(path.suffix.lower(), "image/jpeg")
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 
 
 def _render_preview_thumb_cell(
-    image_path: str,
+    thumb_path: str,
     *,
     thumb_width: int,
     thumb_height: int,
     selected: bool,
 ) -> None:
     """Render one fixed-size thumbnail with no grey letterbox background."""
-    data_uri = _preview_image_data_uri(image_path)
+    data_uri = _preview_thumb_data_uri(thumb_path)
     if not data_uri:
         st.warning(tr("short_drama.role.err.preview_missing"))
         return
@@ -424,6 +465,7 @@ def _render_preview_tile(
     preview_idx: int,
     image_idx: int,
     image_path: str,
+    thumb_path: str,
     thumb_width: int,
     thumb_height: int,
     selected: bool,
@@ -432,7 +474,7 @@ def _render_preview_tile(
     """One fixed-width preview tile: image + two aligned action buttons."""
     with st.container(width=thumb_width):
         _render_preview_thumb_cell(
-            image_path,
+            thumb_path,
             thumb_width=thumb_width,
             thumb_height=thumb_height,
             selected=selected,
@@ -472,6 +514,15 @@ def _render_preview_batch_card(
 
     kind = item.get("generation_kind") or "closeup"
     thumb_w, thumb_h = _preview_thumb_size(kind)
+    thumb_paths = _preview_thumb_paths(item)
+    if len(thumb_paths) != len(paths):
+        thumb_paths = paths
+    thumb_paths = [
+        _ensure_preview_thumbnail(path, thumb_w, thumb_h)
+        if thumb_path == path
+        else thumb_path
+        for path, thumb_path in zip(paths, thumb_paths)
+    ]
     selected_idx = _preview_selected_index(item, len(paths))
 
     caption = tr(
@@ -502,10 +553,12 @@ def _render_preview_batch_card(
     )
     with st.container(horizontal=True, gap="small", vertical_alignment="top"):
         for image_idx, image_path in enumerate(paths):
+            thumb_path = thumb_paths[image_idx]
             _render_preview_tile(
                 preview_idx=preview_idx,
                 image_idx=image_idx,
                 image_path=image_path,
+                thumb_path=thumb_path,
                 thumb_width=thumb_w,
                 thumb_height=thumb_h,
                 selected=(image_idx == selected_idx),
@@ -886,11 +939,17 @@ def _execute_image_generation(
 
     progress.progress(100, text=tr("short_drama.role.progress.done"))
     elapsed = time.time() - start
+    thumb_w, thumb_h = _preview_thumb_size(kind)
+    thumb_paths = [
+        _ensure_preview_thumbnail(path, thumb_w, thumb_h)
+        for path in image_local_paths
+    ]
 
     previews: list[dict] = list(st.session_state.get(_SK_PREVIEWS, []))
     previews.append(
         {
             "image_paths": list(image_local_paths),
+            "thumb_paths": list(thumb_paths),
             "selected_image_index": 0,
             "chinese_name": cn_name,
             "english_name": en_name,
@@ -964,5 +1023,3 @@ def _promote_preview_to_official(preview_index: int) -> None:
     previews.pop(preview_index)
     st.session_state[_SK_PREVIEWS] = previews
     st.rerun()
-
-
